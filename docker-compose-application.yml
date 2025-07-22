@@ -30,10 +30,7 @@ services:
 
   # Updated catalogue service with Redis caching
   catalogue:
-    build:
-      context: .
-      dockerfile: ./docker/catalogue/Dockerfile
-    image: catalogue-redis:latest
+    image: glenthereb/catalogue-redis:latest
     hostname: catalogue
     restart: always
     cap_drop:
