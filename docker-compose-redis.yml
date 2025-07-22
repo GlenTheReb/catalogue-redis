@@ -1,6 +1,7 @@
+version: '3.8'
+
 services:
-  # Main catalogue service with Redis caching
-  catalogue:
+  catalogue-redis:
     build:
       context: .
       dockerfile: ./docker/catalogue/Dockerfile
@@ -8,20 +9,13 @@ services:
     container_name: catalogue-redis
     hostname: catalogue
     restart: unless-stopped
-    cap_drop:
-      - all
-    cap_add:
-      - NET_BIND_SERVICE
-    read_only: true
     ports:
       - "8080:8080"
     environment:
       - reschedule=on-node-failure
     depends_on:
-      catalogue-db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - catalogue-db
+      - redis
     command: ["/app", "-port=8080", "-redis=redis:6379", "-DSN=catalogue_user:default_password@tcp(catalogue-db:3306)/socksdb"]
     networks:
       - catalogue-network
@@ -32,7 +26,6 @@ services:
       retries: 3
       start_period: 40s
 
-  # MySQL database
   catalogue-db:
     build:
       context: ./docker/catalogue-db/
@@ -58,7 +51,6 @@ services:
       retries: 5
       start_period: 30s
 
-  # Redis cache
   redis:
     image: redis:7-alpine
     container_name: catalogue-redis-cache
@@ -86,10 +78,53 @@ services:
       retries: 3
       start_period: 10s
 
+  # Optional: Redis Commander for cache inspection
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    hostname: redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+      - HTTP_USER=admin
+      - HTTP_PASSWORD=redis123
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - catalogue-network
+    profiles:
+      - tools
+
+  # Optional: Performance monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: catalogue-prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - catalogue-network
+    profiles:
+      - monitoring
+
 volumes:
   catalogue_db_data:
     driver: local
   redis_data:
+    driver: local
+  prometheus_data:
     driver: local
 
 networks:

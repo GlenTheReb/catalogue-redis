@@ -1,13 +1,16 @@
-FROM golang:1.7
+FROM golang:1.21-alpine AS builder
+
+# Install git and ca-certificates
+RUN apk add --no-cache git ca-certificates
 
 COPY . /go/src/github.com/microservices-demo/catalogue
 WORKDIR /go/src/github.com/microservices-demo/catalogue
 
-RUN go get -u github.com/FiloSottile/gvt
-RUN gvt restore && \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app github.com/microservices-demo/catalogue/cmd/cataloguesvc
+# Download dependencies
+RUN go mod download && \
+    CGO_ENABLED=0 GOOS=linux go build -mod=mod -a -installsuffix cgo -o /app github.com/microservices-demo/catalogue/cmd/cataloguesvc
 
-FROM alpine:3.4
+FROM alpine:3.18
 
 ENV	SERVICE_USER=myuser \
 	SERVICE_UID=10001 \
@@ -18,7 +21,7 @@ RUN	addgroup -g ${SERVICE_GID} ${SERVICE_GROUP} && \
 	adduser -g "${SERVICE_NAME} user" -D -H -G ${SERVICE_GROUP} -s /sbin/nologin -u ${SERVICE_UID} ${SERVICE_USER}
 
 WORKDIR /
-COPY --from=0 /app /app
+COPY --from=builder /app /app
 COPY images/ /images/
 
 RUN	chmod +x /app && \
@@ -33,8 +36,8 @@ ARG COMMIT
 LABEL org.label-schema.vendor="Weaveworks" \
   org.label-schema.build-date="${BUILD_DATE}" \
   org.label-schema.version="${BUILD_VERSION}" \
-  org.label-schema.name="Socks Shop: Catalogue" \
-  org.label-schema.description="REST API for Catalogue service" \
+  org.label-schema.name="Socks Shop: Catalogue with Redis" \
+  org.label-schema.description="REST API for Catalogue service with Redis caching" \
   org.label-schema.url="https://github.com/microservices-demo/catalogue" \
   org.label-schema.vcs-url="github.com:microservices-demo/catalogue.git" \
   org.label-schema.vcs-ref="${COMMIT}" \

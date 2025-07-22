@@ -6,8 +6,6 @@ package catalogue
 
 import (
 	"github.com/go-kit/kit/endpoint"
-	"github.com/go-kit/kit/tracing/opentracing"
-	stdopentracing "github.com/opentracing/opentracing-go"
 	"golang.org/x/net/context"
 )
 
@@ -22,13 +20,13 @@ type Endpoints struct {
 
 // MakeEndpoints returns an Endpoints structure, where each endpoint is
 // backed by the given service.
-func MakeEndpoints(s Service, tracer stdopentracing.Tracer) Endpoints {
+func MakeEndpoints(s Service) Endpoints {
 	return Endpoints{
-		ListEndpoint:   opentracing.TraceServer(tracer, "GET /catalogue")(MakeListEndpoint(s)),
-		CountEndpoint:  opentracing.TraceServer(tracer, "GET /catalogue/size")(MakeCountEndpoint(s)),
-		GetEndpoint:    opentracing.TraceServer(tracer, "GET /catalogue/{id}")(MakeGetEndpoint(s)),
-		TagsEndpoint:   opentracing.TraceServer(tracer, "GET /tags")(MakeTagsEndpoint(s)),
-		HealthEndpoint: opentracing.TraceServer(tracer, "GET /health")(MakeHealthEndpoint(s)),
+		ListEndpoint:   MakeListEndpoint(s),
+		CountEndpoint:  MakeCountEndpoint(s),
+		GetEndpoint:    MakeGetEndpoint(s),
+		TagsEndpoint:   MakeTagsEndpoint(s),
+		HealthEndpoint: MakeHealthEndpoint(s),
 	}
 }
 

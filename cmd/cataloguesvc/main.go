@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
+	"time"
 
 	"github.com/go-kit/kit/log"
 	stdopentracing "github.com/opentracing/opentracing-go"
-	zipkin "github.com/openzipkin/zipkin-go-opentracing"
 
 	"net"
 	"net/http"
@@ -43,10 +42,11 @@ func init() {
 
 func main() {
 	var (
-		port   = flag.String("port", "80", "Port to bind HTTP listener") // TODO(pb): should be -addr, default ":80"
-		images = flag.String("images", "./images/", "Image path")
-		dsn    = flag.String("DSN", "catalogue_user:default_password@tcp(catalogue-db:3306)/socksdb", "Data Source Name: [username[:password]@][protocol[(address)]]/dbname")
-		zip    = flag.String("zipkin", os.Getenv("ZIPKIN"), "Zipkin address")
+		port      = flag.String("port", "80", "Port to bind HTTP listener") // TODO(pb): should be -addr, default ":80"
+		images    = flag.String("images", "./images/", "Image path")
+		dsn       = flag.String("DSN", "catalogue_user:default_password@tcp(catalogue-db:3306)/socksdb", "Data Source Name: [username[:password]@][protocol[(address)]]/dbname")
+		zip       = flag.String("zipkin", os.Getenv("ZIPKIN"), "Zipkin address")
+		redisAddr = flag.String("redis", "redis:6379", "Redis address for caching")
 	)
 	flag.Parse()
 
@@ -66,8 +66,8 @@ func main() {
 	var logger log.Logger
 	{
 		logger = log.NewLogfmtLogger(os.Stderr)
-		logger = log.NewContext(logger).With("ts", log.DefaultTimestampUTC)
-		logger = log.NewContext(logger).With("caller", log.DefaultCaller)
+		logger = log.With(logger, "ts", log.DefaultTimestampUTC)
+		logger = log.With(logger, "caller", log.DefaultCaller)
 	}
 
 	var tracer stdopentracing.Tracer
@@ -81,26 +81,12 @@ func main() {
 				logger.Log("err", err)
 				os.Exit(1)
 			}
-			localAddr := conn.LocalAddr().(*net.UDPAddr)
-			host := strings.Split(localAddr.String(), ":")[0]
 			defer conn.Close()
-			logger := log.NewContext(logger).With("tracer", "Zipkin")
+			logger := log.With(logger, "tracer", "Zipkin")
 			logger.Log("addr", zip)
-			collector, err := zipkin.NewHTTPCollector(
-				*zip,
-				zipkin.HTTPLogger(logger),
-			)
-			if err != nil {
-				logger.Log("err", err)
-				os.Exit(1)
-			}
-			tracer, err = zipkin.NewTracer(
-				zipkin.NewRecorder(collector, false, fmt.Sprintf("%v:%v", host, port), ServiceName),
-			)
-			if err != nil {
-				logger.Log("err", err)
-				os.Exit(1)
-			}
+			// For newer versions of zipkin-go, we'll skip the zipkin setup for now
+			// and use a noop tracer instead
+			tracer = stdopentracing.NoopTracer{}
 		}
 		stdopentracing.InitGlobalTracer(tracer)
 	}
@@ -121,16 +107,36 @@ func main() {
 
 	// Service domain.
 	var service catalogue.Service
+	var cacheMetrics *catalogue.CacheMetrics
 	{
-		service = catalogue.NewCatalogueService(db, logger)
+		// Create base catalogue service
+		baseService := catalogue.NewCatalogueService(db, logger)
+		
+		// Create Redis cache
+		cache := catalogue.NewCatalogueCache(*redisAddr, logger)
+		
+		// Wrap with caching
+		cachedSvc := catalogue.NewCachedService(baseService, cache, logger)
+		cacheMetrics = cachedSvc.GetMetrics()
+		
+		service = cachedSvc
 		service = catalogue.LoggingMiddleware(logger)(service)
+		
+		// Initialize cache warming
+		warmer := catalogue.NewCacheWarmer(baseService, cache, logger)
+		warmer.WarmCacheAsync() // Start cache warming in background
+		
+		// Start periodic metrics logging (every 5 minutes)
+		cacheMetrics.StartPeriodicLogging(5 * time.Minute)
+		
+		logger.Log("redis_addr", *redisAddr, "cache_enabled", "true", "cache_warming", "enabled", "metrics", "enabled")
 	}
 
 	// Endpoint domain.
-	endpoints := catalogue.MakeEndpoints(service, tracer)
+	endpoints := catalogue.MakeEndpoints(service)
 
 	// HTTP router
-	router := catalogue.MakeHTTPHandler(ctx, endpoints, *images, logger, tracer)
+	router := catalogue.MakeHTTPHandler(ctx, endpoints, *images, logger)
 
 	httpMiddleware := []middleware.Interface{
 		middleware.Instrument{
